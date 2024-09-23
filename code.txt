@@ -1,0 +1,109 @@
+# Upload PDF to Google Colab
+from google.colab import files
+uploaded = files.upload()
+
+# Check the uploaded file and print the file name
+pdf_filename = list(uploaded.keys())[0]
+print(f"Uploaded PDF: {pdf_filename}")
+
+!pip install pydantic==1.10.7 langchain==0.0.150 pypdf pandas matplotlib tiktoken transformers openai faiss-cpu
+!pip install PyPDF2
+import PyPDF2
+import os
+from langchain.document_loaders import PyPDFLoader
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain.embeddings import OpenAIEmbeddings
+from langchain.vectorstores import FAISS
+
+# Open and read the PDF
+with open(pdf_filename, 'rb') as f:
+    reader = PyPDF2.PdfReader(f)
+    pdf_text = ""
+
+    # Extract text from each page
+    for page_num in range(len(reader.pages)):
+        page = reader.pages[page_num]
+        pdf_text += page.extract_text()
+
+# Save the extracted text to a file for further use
+with open('large_file.txt', 'w') as f:
+    f.write(pdf_text)
+
+print("PDF text extraction complete!")
+
+
+!pip install sentence-transformers faiss-cpu transformers PyPDF2
+
+from sentence_transformers import SentenceTransformer
+from faiss import IndexFlatL2
+import numpy as np
+from transformers import pipeline
+from PyPDF2 import PdfReader
+import os
+
+# Load and read the PDF
+pdf_filename = "manual.pdf"  # Ensure this is your actual PDF filename
+
+# Extract text from PDF
+def extract_text_from_pdf(pdf_path):
+    pdf_text = ""
+    with open(pdf_path, 'rb') as f:
+        reader = PdfReader(f)
+        for page in reader.pages:
+            pdf_text += page.extract_text()
+    return pdf_text
+
+# Load the text
+pdf_text = extract_text_from_pdf(pdf_filename)
+
+# Split text into chunks (simple example, adjust as needed)
+def split_text(text, chunk_size=512):
+    return [text[i:i+chunk_size] for i in range(0, len(text), chunk_size)]
+
+text_chunks = split_text(pdf_text)
+
+# Initialize sentence transformer model for embeddings
+model_name = 'all-MiniLM-L6-v2'  # You can choose other models from Hugging Face
+model = SentenceTransformer(model_name)
+embeddings = model.encode(text_chunks)
+
+# Create FAISS index
+index = IndexFlatL2(embeddings.shape[1])
+index.add(np.array(embeddings))
+
+# Initialize Hugging Face pipeline for question-answering with explicit model and tokenizer
+qa_pipeline = pipeline(
+    "question-answering",
+    model="deepset/roberta-base-squad2",
+    tokenizer="deepset/roberta-base-squad2"
+)
+
+# Define a function to handle similarity search
+def search_similar(query, k=5):
+    query_embedding = model.encode([query])
+    distances, indices = index.search(np.array(query_embedding), k)
+    return [text_chunks[i] for i in indices[0]]
+
+# Define a function to generate a response
+def generate_response(question):
+    # Get the top relevant context
+    context = "\n".join(search_similar(question))
+
+    # Ensure the context doesn't exceed the model's max input length
+    if len(context) > 1024:
+        context = context[:1024]  # Truncate if necessary
+
+    # Use the question-answering model to find the answer
+    answer = qa_pipeline(question=question, context=context)
+
+    return answer['answer']
+
+# Interactive chat loop
+print("Chatbot is ready! Ask me anything related to the aircraft maintenance manual.")
+while True:
+    user_input = input("You: ")
+    if user_input.lower() in ["exit", "quit", "bye"]:
+        print("Chatbot: Goodbye!")
+        break
+    answer = generate_response(user_input)
+    print(f"Chatbot: {answer}")
